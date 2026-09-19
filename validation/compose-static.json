@@ -1,0 +1,7 @@
+{
+  "check": "Static YAML, paths, dependencies, port bindings, Grafana JSON",
+  "services": 17,
+  "result": "PASS",
+  "errors": [],
+  "limitation": "Not a Docker Compose engine validation or container execution"
+}

@@ -1,0 +1,7 @@
+apiVersion: 1
+providers:
+  - name: AutoPilot
+    folder: AutoPilot
+    type: file
+    options:
+      path: /var/lib/grafana/dashboards

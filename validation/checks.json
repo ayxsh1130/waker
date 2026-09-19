@@ -1,0 +1,23 @@
+{
+  "date": "2026-09-09",
+  "backend_tests": {
+    "passed": 102,
+    "failed": 0,
+    "skipped": 0,
+    "duration_seconds": 5.58,
+    "upstream_deprecation_warnings": 1
+  },
+  "python_lint": "PASS",
+  "frontend_lint": "PASS",
+  "frontend_typescript_build": "PASS",
+  "sqlite_migration_upgrade": "PASS",
+  "alembic_schema_comparison": "PASS",
+  "postgres_offline_sql": "PASS",
+  "backend_dependency_compatibility": "PASS",
+  "compose_static": "PASS",
+  "docker_execution": "NOT_EXECUTED",
+  "real_llm": "NOT_EXECUTED",
+  "embedding_runtime": "NOT_EXECUTED",
+  "windows_scripts": "NOT_EXECUTED",
+  "browser_qa": "NOT_EXECUTED"
+}
