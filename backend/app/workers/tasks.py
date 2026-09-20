@@ -77,6 +77,8 @@ def execute(self, task_id):
             task.status = "SUCCEEDED"
             task.completed_at = now()
             task.result = result
+            task.exception = None
+            task.stack_trace = None
             task_log(db, task.id, "INFO", "Execution succeeded", result)
         return result
     except Exception as exc:

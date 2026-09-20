@@ -1,13 +1,25 @@
 """Evaluation-only fault orchestration. Never imported by diagnostic tools."""
 
+from datetime import UTC, timedelta
+
 import httpx
 from sqlalchemy import select
 
 from app.core.config import settings
 from app.core.schemas import TaskInput
-from app.db.base import now, seconds, uid
-from app.db.models import DeploymentRecord, FaultInjection, RuntimeSetting, TaskExecution
+from app.db.base import now, uid
+from app.db.models import (
+    ApprovalRequest,
+    DeploymentRecord,
+    FaultInjection,
+    Incident,
+    Remediation,
+    RemediationExecution,
+    RuntimeSetting,
+    TaskExecution,
+)
 from app.investigation.verification import COMPONENT
+from app.observability.events import incident_event
 from app.workers.publisher import create_task
 
 
@@ -112,8 +124,31 @@ def activate(db, fault):
     fault.parameters = {**fault.parameters, "activated_at": now().isoformat()}
 
 
-def reset_fault(db, fault):
+def reset_fault(db, fault, reason="manual_or_trial_cleanup"):
     fault.status = "RESETTING"
+    # Cleanup is an independent recovery mechanism, not an approved remediation.
+    fault.parameters = {**fault.parameters, "cleanup_reason": reason}
+    for incident in db.scalars(select(Incident).where(Incident.scope_id == fault.scope_id)):
+        for remediation in db.scalars(
+            select(Remediation).where(
+                Remediation.incident_id == incident.id,
+                Remediation.action == "RESTART_WORKER",
+            )
+        ):
+            approval = db.scalar(
+                select(ApprovalRequest).where(ApprovalRequest.remediation_id == remediation.id)
+            )
+            executed = db.scalar(
+                select(RemediationExecution.id).where(RemediationExecution.remediation_id == remediation.id)
+            )
+            if approval and approval.status in {"PENDING", "APPROVED"} and not executed:
+                approval.status = "CANCELLED"
+                remediation.status = "CANCELLED"
+                remediation.requested = False
+                remediation.reason = "Fault cleanup cancelled this restart proposal"
+                if incident.status == "APPROVAL_REQUIRED":
+                    incident.status = "HUMAN_REVIEW"
+        incident_event(db, incident.id, "Fault cleanup", {"reason": reason, "automatic_repair": False})
     db.commit()
     try:
         control("DELETE", "dependency", "/internal/profile/" + fault.scope_id)
@@ -128,6 +163,43 @@ def reset_fault(db, fault):
         fault.error = "Cleanup pending: " + type(exc).__name__
 
 
+def cleanup_deadline(db, fault):
+    start = fault.injected_at.replace(tzinfo=UTC)
+    deadline = start + timedelta(seconds=fault.parameters["duration_seconds"])
+    if fault.fault_type != "WORKER_FAILURE" or fault.run_id is not None:
+        return deadline
+    # Only manual worker tests receive a grace period, with a hard 30-minute
+    # bound from the actual crash. Repeated clicks never move this bound.
+    approvals = db.scalars(
+        select(ApprovalRequest)
+        .join(Remediation, Remediation.id == ApprovalRequest.remediation_id)
+        .join(Incident, Incident.id == Remediation.incident_id)
+        .where(
+            Incident.scope_id == fault.scope_id,
+            Remediation.action == "RESTART_WORKER",
+            ApprovalRequest.status.in_(["PENDING", "APPROVED"]),
+        )
+    )
+    for approval in approvals:
+        deadline = max(deadline, approval.expires_at.replace(tzinfo=UTC) + timedelta(seconds=5))
+    executions = db.scalars(
+        select(RemediationExecution)
+        .join(Remediation, Remediation.id == RemediationExecution.remediation_id)
+        .join(Incident, Incident.id == Remediation.incident_id)
+        .where(
+            Incident.scope_id == fault.scope_id,
+            RemediationExecution.status.in_(["EXECUTING", "OBSERVING"]),
+        )
+    )
+    for execution in executions:
+        deadline = max(
+            deadline,
+            execution.created_at.replace(tzinfo=UTC)
+            + timedelta(seconds=settings().observation_seconds * 3 + 5),
+        )
+    return min(deadline, start + timedelta(minutes=30))
+
+
 def tick_faults(db):
     for fault in list(
         db.scalars(
@@ -135,7 +207,7 @@ def tick_faults(db):
         )
     ):
         if fault.status == "RESETTING":
-            reset_fault(db, fault)
+            reset_fault(db, fault, fault.parameters.get("cleanup_reason", "interrupted_cleanup"))
             continue
         if fault.status == "SCHEDULED":
             try:
@@ -158,5 +230,5 @@ def tick_faults(db):
                     fault.injected_at = now()
                 except httpx.HTTPError as exc:
                     fault.error = "Crash request failed: " + type(exc).__name__
-        if fault.injected_at and seconds(now(), fault.injected_at) >= fault.parameters["duration_seconds"]:
-            reset_fault(db, fault)
+        if fault.injected_at and now() >= cleanup_deadline(db, fault):
+            reset_fault(db, fault, "deadline_expired")

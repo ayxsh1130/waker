@@ -1,5 +1,5 @@
 import json
-from datetime import datetime
+from datetime import UTC, datetime
 
 from pydantic import Field
 
@@ -30,6 +30,28 @@ COMPONENT = {
 }
 
 
+def evidence_timestamp(row):
+    try:
+        stamp = datetime.fromisoformat(row["timestamp"].replace("Z", "+00:00"))
+        return stamp if stamp.tzinfo else None
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return None
+
+
+def latest_observation(evidence, kind):
+    rows = [row for row in evidence if row.get("kind") == kind]
+    if not rows or any(evidence_timestamp(row) is None for row in rows):
+        return None
+    row = max(rows, key=evidence_timestamp)
+    age = (datetime.now(UTC) - evidence_timestamp(row)).total_seconds()
+    return row if row.get("available", True) and -5 <= age <= 120 else None
+
+
+def broker_status(evidence):
+    row = latest_observation(evidence, "get_redis_status")
+    return row["content"].get("broker", {}).get("status") if row else None
+
+
 def verify_worker_recovery(diagnosis, evidence):
     """Verify recovery at observation time, without erasing the original alert."""
 
@@ -54,10 +76,9 @@ def verify_worker_recovery(diagnosis, evidence):
     cited = set(diagnosis.supporting_evidence)
     latest = {}
     for kind in ("get_worker_status", "get_redis_status"):
-        rows = [row for row in evidence if row["kind"] == kind]
-        if not rows or any(timestamp(row) is None for row in rows):
+        row = latest_observation(evidence, kind)
+        if row is None:
             return False, set()
-        row = max(rows, key=timestamp)
         if row["id"] not in cited or not row.get("available", True):
             return False, set()
         latest[kind] = row
@@ -95,8 +116,30 @@ def verify_diagnosis(diagnosis, evidence):
         if eid not in by_id:
             contradictions.append("Uncollected evidence reference: " + eid)
     current = [e for e in cited if e.get("available", True) and e["kind"] != "search_historical_incidents"]
+    live_kinds = {
+        "get_worker_status", "get_redis_status", "get_external_service_status",
+        "get_database_status", "get_queue_metrics",
+    }
+    latest_live = {kind: latest_observation(evidence, kind) for kind in live_kinds}
+    current = [
+        row for row in current
+        if row["kind"] not in live_kinds
+        or (latest_live[row["kind"]] and latest_live[row["kind"]]["id"] == row["id"])
+    ]
     kinds = {e["kind"] for e in current}
     text = json.dumps([e["content"] for e in current], default=str).lower()
+    task_text = json.dumps([
+        e["content"] for e in current
+        if e["kind"] in {"initial_signal", "get_task_details", "get_task_logs",
+                         "get_worker_logs", "get_recent_errors", "get_trace", "get_related_tasks"}
+    ], default=str).lower()
+    responses = [
+        response for e in current if e["kind"] == "get_external_service_status"
+        for response in e["content"].get("probes", []) + e["content"].get("observations", [])
+        if isinstance(response, dict)
+    ]
+    codes = {response.get("status_code") for response in responses
+             if isinstance(response.get("status_code"), int)}
     if len(kinds) < 2:
         missing.append("At least two current evidence source types")
     if not any(k.startswith("get_") for k in kinds):
@@ -104,6 +147,9 @@ def verify_diagnosis(diagnosis, evidence):
     cause = diagnosis.root_cause.value
     healthy_worker = cause == "HEALTHY" and diagnosis.affected_component == "worker"
     recovery_ok, resolved = verify_worker_recovery(diagnosis, evidence) if healthy_worker else (False, set())
+    failure_ok, failure_ids = (
+        worker_failure_observations(evidence) if cause == "WORKER_FAILURE" else (False, set())
+    )
     if not healthy_worker and COMPONENT.get(cause, "unknown") != diagnosis.affected_component:
         contradictions.append("Affected component does not match cause")
     if set(diagnosis.contradicting_evidence) - (resolved if recovery_ok else set()):
@@ -115,31 +161,31 @@ def verify_diagnosis(diagnosis, evidence):
             "after the original alert; cite get_worker_status and get_redis_status; use NO_ACTION",
         ),
         "API_TIMEOUT": (
-            any(t in text for t in ["readtimeout", "connecttimeout", "timeoutexceeded"])
+            any(t in task_text for t in ["readtimeout", "connecttimeout", "timeoutexceeded"])
             and "get_external_service_status" in kinds,
             "Timeout error and dependency probe",
         ),
         "DEPENDENCY_ERROR": (
-            "500" in text and "get_external_service_status" in kinds,
+            ("httpstatuserror" in task_text or any(500 <= code < 600 for code in codes))
+            and "get_external_service_status" in kinds,
             "HTTP error and dependency probe",
         ),
         "WORKER_FAILURE": (
-            "offline" in text
-            and "get_worker_status" in kinds
-            and "get_redis_status" in kinds
-            and '"broker": {"status": "healthy"' in text,
-            "Offline worker and healthy broker",
+            failure_ok and failure_ids.issubset(set(diagnosis.supporting_evidence)),
+            "Same worker offline and healthy broker in latest cited checks within 120 seconds; "
+            "collect and cite get_worker_status and get_redis_status",
         ),
         "BROKER_DISRUPTION": (
-            "get_redis_status" in kinds and '"broker": {"status": "unavailable"' in text,
+            broker_status(evidence) == "UNAVAILABLE"
+            and latest_observation(evidence, "get_redis_status")["id"] in diagnosis.supporting_evidence,
             "Failed broker probe",
         ),
         "DATABASE_FAILURE": (
-            "operationalerror" in text and "get_database_status" in kinds,
+            "operationalerror" in task_text and "get_database_status" in kinds,
             "Database exception and connectivity check",
         ),
         "TASK_EXCEPTION": (
-            "valueerror" in text and "get_task_logs" in kinds,
+            "valueerror" in task_text and "get_task_logs" in kinds,
             "Application exception in task logs",
         ),
         "POISON_TASK": (
@@ -147,17 +193,17 @@ def verify_diagnosis(diagnosis, evidence):
             "Repeated failures and related task check",
         ),
         "BAD_CONFIGURATION": (
-            "invalid literal for int" in text and "get_source_file" in kinds,
+            "invalid literal for int" in task_text and "get_source_file" in kinds,
             "Parsing error and source context",
         ),
         "DEPLOYMENT_REGRESSION": (
-            "zerodivisionerror" in text and "get_recent_deployments" in kinds and "get_source_file" in kinds,
+            "zerodivisionerror" in task_text and "get_recent_deployments" in kinds and "get_source_file" in kinds,
             "Failure, release metadata and source context",
         ),
         "INTERMITTENT_FAILURE": (
             "get_external_service_status" in kinds
-            and '"status_code": 500' in text
-            and '"status_code": 200' in text,
+            and 500 in codes
+            and 200 in codes,
             "Both successful and failed dependency responses",
         ),
         "OVERLOAD": (
@@ -174,6 +220,22 @@ def verify_diagnosis(diagnosis, evidence):
     }
     ok, description = required.get(cause, (False, "Specific supported root cause required"))
     (checks if ok else missing).append(description)
+    if cause == "WORKER_FAILURE" and not ok:
+        for kind in ("get_worker_status", "get_redis_status"):
+            row = latest_live[kind]
+            if row is None:
+                missing.append(kind + ": latest observation unavailable, invalid, or older than 120 seconds")
+            elif row["id"] not in diagnosis.supporting_evidence:
+                missing.append(kind + ": cite latest evidence " + row["id"])
+        row = latest_live["get_worker_status"]
+        if row:
+            target = row["content"].get("target_worker")
+            for worker in row["content"].get("workers", []):
+                if worker.get("name") == target and worker.get("status") != "OFFLINE":
+                    missing.append(f"Worker {target} is {worker.get('status')}; restart requires OFFLINE")
+        row = latest_live["get_redis_status"]
+        if row and row["content"].get("broker", {}).get("status") != "HEALTHY":
+            missing.append("Broker is not healthy; distinguish connectivity loss from worker failure")
     if len(kinds) >= 2:
         checks.append("Multiple current source types collected")
     if cited and len(cited) == len(diagnosis.supporting_evidence):
@@ -186,10 +248,10 @@ def verify_diagnosis(diagnosis, evidence):
         contradictions=contradictions,
         missing_evidence=missing,
     )
+
+
 def worker_failure_observations(evidence):
     """Require fresh worker and broker evidence before recommending restart."""
-    from datetime import UTC, datetime
-
     latest = {}
 
     for kind in ("get_worker_status", "get_redis_status"):
@@ -200,9 +262,7 @@ def worker_failure_observations(evidence):
         dated = []
         for row in rows:
             try:
-                stamp = datetime.fromisoformat(
-                    row["timestamp"].replace("Z", "+00:00")
-                )
+                stamp = datetime.fromisoformat(row["timestamp"].replace("Z", "+00:00"))
                 if stamp.tzinfo is None:
                     return False, set()
             except (KeyError, ValueError, TypeError, AttributeError):
@@ -220,20 +280,22 @@ def worker_failure_observations(evidence):
     broker_at, broker_row = latest["get_redis_status"]
 
     target = worker_row["content"].get("target_worker")
+    names = {
+        row["content"].get("worker")
+        for row in evidence
+        if row["kind"] in {"initial_signal", "get_task_details"} and row["content"].get("worker")
+    }
+    if target and names and names != {target}:
+        return False, set()
     if not target:
         names = {
             row["content"].get("worker")
             for row in evidence
-            if row["kind"] in {"initial_signal", "get_task_details"}
-            and row["content"].get("worker")
+            if row["kind"] in {"initial_signal", "get_task_details"} and row["content"].get("worker")
         }
         target = next(iter(names)) if len(names) == 1 else None
 
-    workers = [
-        worker
-        for worker in worker_row["content"].get("workers", [])
-        if worker.get("name") == target
-    ]
+    workers = [worker for worker in worker_row["content"].get("workers", []) if worker.get("name") == target]
 
     if (
         not target

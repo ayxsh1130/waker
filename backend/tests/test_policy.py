@@ -89,6 +89,7 @@ def test_execute_rechecks_mode(db, incident, diagnosis, monkeypatch):
 def test_approval_once_and_expiry(db, incident, diagnosis, monkeypatch):
     execute_mode(monkeypatch)
     diagnosis.recommended_action = "RESTART_WORKER"
+    diagnosis.root_cause = "WORKER_FAILURE"
     row = propose(db, incident, diagnosis)
     db.flush()
     approval = db.scalar(select(ApprovalRequest))
@@ -113,7 +114,7 @@ def test_approval_once_and_expiry(db, incident, diagnosis, monkeypatch):
         ("RETRY_TASK", "SUCCEEDED", True, True, None, 0, "FAILED"),
         ("RETRY_TASK", "SUCCEEDED", True, True, 0, 1, "FAILED"),
         ("RETRY_TASK", "STARTED", True, True, 0, 0, "PARTIALLY_RECOVERED"),
-        ("RESTART_WORKER", None, True, True, 0, 0, "FAILED"),
+        ("RESTART_WORKER", None, True, True, 0, 0, "RECOVERED"),
     ],
 )
 def test_recovery_requires_business_and_health_evidence(

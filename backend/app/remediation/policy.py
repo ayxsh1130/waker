@@ -14,6 +14,7 @@ class PolicyContext:
     previous_failure: bool = False
     repeated: bool = False
     environment: str = "development"
+    cause: str | None = None
 
 
 @dataclass(frozen=True)
@@ -35,6 +36,15 @@ def evaluate(action, context):
         return decision("DENIED", "Diagnosis has not passed deterministic verification")
     if context.confidence < context.min_confidence:
         return decision("DENIED", "Confidence below configured threshold")
+    if context.cause is not None:
+        causes = {
+            "RESTART_WORKER": {"WORKER_FAILURE"},
+            "RETRY_TASK": {"API_TIMEOUT", "DEPENDENCY_ERROR", "INTERMITTENT_FAILURE", "TASK_EXCEPTION"},
+            "QUARANTINE_TASK": {"POISON_TASK", "TASK_EXCEPTION"},
+            "PAUSE_QUEUE": {"OVERLOAD", "POISON_TASK"},
+        }
+        if action in causes and context.cause not in causes[action]:
+            return decision("DENIED", "Action does not match the verified root cause")
     if context.previous_failure or context.repeated:
         return decision("DENIED", "Prior failed action or active cooldown requires human review")
     if action == "RETRY_TASK":

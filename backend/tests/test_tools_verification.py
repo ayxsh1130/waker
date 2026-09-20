@@ -8,6 +8,7 @@ from app.agents.workflow import create_investigation
 from app.core.config import settings
 from app.core.safety import redact, source_path
 from app.core.schemas import DiagnosisOutput, TaskInput, ToolArguments
+from app.db.base import now
 from app.investigation.verification import verify_diagnosis
 from app.tools.registry import DiagnosticTools
 from app.workers.publisher import create_task
@@ -97,6 +98,7 @@ EVIDENCE = [
     {
         "id": "two",
         "kind": "get_external_service_status",
+        "timestamp": now().isoformat(),
         "content": {"probes": [{"error_type": "ReadTimeout"}]},
         "available": True,
     },

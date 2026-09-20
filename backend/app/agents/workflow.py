@@ -1,4 +1,5 @@
 import json
+from datetime import UTC
 from typing import TypedDict
 
 from langgraph.graph import END, START, StateGraph
@@ -42,7 +43,7 @@ def evidence_view(e):
         "content": e.content,
         "available": e.available,
         "component": e.component,
-        "timestamp": e.created_at.isoformat(),
+        "timestamp": e.created_at.replace(tzinfo=UTC).isoformat(),
     }
 
 
@@ -145,6 +146,9 @@ class InvestigationRunner:
                 "get_external_service_status. Collect missing checks when tools are "
                 "available; otherwise reassess only the evidence already collected. "
                 "Use Evidence IDs, not IDs inside task/log content. Do not invent support."
+                " WORKER_FAILURE requires the incident worker OFFLINE and a HEALTHY broker in "
+                "fresh get_worker_status and get_redis_status checks; cite both IDs. "
+                "An old heartbeat alert does not show current worker failure."
             )
         if state["diagnosis"]:
             context["previous_diagnosis"] = {

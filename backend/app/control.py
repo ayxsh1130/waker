@@ -23,7 +23,7 @@ from app.faults.service import tick_faults
 from app.observability.monitor import event_loop, sample
 from app.observability.telemetry import configure_telemetry
 from app.remediation.recovery import observe_recoveries
-from app.remediation.service import execute_remediation, propose
+from app.remediation.service import execute_remediation, expire_approvals, propose
 from app.retrieval.client import index_pending
 from app.workers.publisher import dispatch_pending
 
@@ -49,6 +49,7 @@ def investigate_next(db):
 
 
 def remedies(db):
+    expire_approvals(db)
     for remediation in list(db.scalars(select(Remediation).where(Remediation.requested.is_(True)))):
         execute_remediation(db, remediation)
     observe_recoveries(db)

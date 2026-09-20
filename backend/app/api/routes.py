@@ -7,13 +7,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.encoders import jsonable_encoder
 from sqlalchemy import select
 
-from app.agents.workflow import evidence_view
 from app.api.queries import health, incident_detail, metric_summary, task_detail
 from app.core.auth import require_session, require_write
 from app.core.config import settings
 from app.core.schemas import (
     Configuration,
-    DiagnosisOutput,
     ExperimentInput,
     FaultInput,
     StrictModel,
@@ -23,7 +21,6 @@ from app.core.schemas import (
 from app.db.base import uid
 from app.db.models import (
     ApprovalRequest,
-    Evidence,
     Experiment,
     FaultInjection,
     HistoricalIncident,
@@ -31,13 +28,11 @@ from app.db.models import (
     Investigation,
     MetricSample,
     TaskExecution,
-    Verification,
     Worker,
 )
 from app.db.session import get_db, row_dict
 from app.experiments.service import create_experiment, results
 from app.faults.service import schedule_fault
-from app.investigation.verification import verify_diagnosis
 from app.observability.events import incident_event
 from app.remediation.service import decide_approval, latest_diagnosis, propose
 from app.tools.probes import queue_metrics
@@ -152,31 +147,9 @@ def verify(key: str, db=Depends(get_db, scope="function")):
     diagnosis = latest_diagnosis(db, key)
     if not diagnosis:
         raise HTTPException(409, "No diagnosis available")
-    output = DiagnosisOutput.model_validate({k: getattr(diagnosis, k) for k in DiagnosisOutput.model_fields})
-    rows = list(
-        db.scalars(
-            select(Evidence).where(
-                Evidence.incident_id == key,
-                (Evidence.investigation_id == diagnosis.investigation_id)
-                | (Evidence.kind == "initial_signal"),
-            )
-        )
-    )
-    result = verify_diagnosis(output, [evidence_view(e) for e in rows])
-    previous = db.scalar(
-        select(Verification)
-        .where(Verification.diagnosis_id == diagnosis.id)
-        .order_by(Verification.created_at.desc())
-        .limit(1)
-    )
-    if previous and all(getattr(previous, field) == value for field, value in result.model_dump().items()):
-        return row_dict(previous)
-    record = Verification(diagnosis_id=diagnosis.id, **result.model_dump())
-    db.add(record)
-    incident.status = "VERIFIED" if result.verified else "UNVERIFIED"
-    incident_event(db, key, "Verification", result.model_dump())
-    db.flush()
-    return row_dict(record)
+    from app.investigation.service import verify_current
+
+    return row_dict(verify_current(db, incident, diagnosis))
 
 
 @router.post("/incidents/{key}/remediate", dependencies=[Depends(require_write)])

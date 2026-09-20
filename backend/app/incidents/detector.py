@@ -13,6 +13,8 @@ from app.observability.events import incident_event
 def record_signal(db, component, kind, symptoms, task=None, scope="local", worker=None):
     scope = task.scope_id if task else scope
     queue = task.queue if task else ("experiment" if scope != "local" else None)
+    if not task and worker in {"experiment@autopilot", "default@autopilot"}:
+        queue = worker.split("@", 1)[0]
     fingerprint = hashlib.sha256(f"{scope}:{component}:{kind}:{queue}:{worker or ''}".encode()).hexdigest()
     cutoff = now() - timedelta(seconds=settings().detection_window_seconds)
     incident = db.scalar(

@@ -139,7 +139,7 @@ class DiagnosticTools:
     def _call(self, name, args):
         db, incident = self.db, self.incident
         task_id = args.task_id or incident.task_id
-        task = db.get(TaskExecution, task_id) if task_id else None
+        task = db.get(TaskExecution, task_id, populate_existing=True) if task_id else None
         if task and task.scope_id != incident.scope_id:
             raise ValueError("Task outside investigation scope")
         if name == "get_incident_details":
@@ -223,7 +223,9 @@ class DiagnosticTools:
         if name == "get_redis_status":
             return {
                 "control": probes.redis_status(),
-                "broker": probes.redis_status(settings().broker_probe_url),
+                "broker": probes.redis_status(
+                    settings().broker_probe_url if incident.queue == "experiment" else None
+                ),
             }, "broker"
         if name == "get_database_status":
             return probes.database_status(), "database"

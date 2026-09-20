@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 import { Play, ShieldCheck, Workflow } from "lucide-react";
 import { useAction, useApi } from "../hooks/useApi";
 import { api } from "../services/api";
@@ -135,12 +135,15 @@ export function IncidentDetail() {
     );
   const incident = data.incident;
   const latest = data.diagnoses.at(-1);
-  const verification = data.verifications.at(-1);
+  const verification = data.verifications.filter((r) => r.diagnosis_id === latest?.id).at(-1);
+  const pendingApproval = data.approvals.find((r) =>
+    r.status === "PENDING"
+  );
   const stages = [
     ["Detection", true],
     ["Investigation", data.investigations.length > 0],
     ["Diagnosis", data.diagnoses.length > 0],
-    ["Verification", data.verifications.some((r) => r.verified === true)],
+    ["Verification", verification?.verified === true],
     ["Remediation", data.executions.length > 0],
     ["Recovery", incident.status === "RECOVERED"],
   ] as const;
@@ -153,6 +156,12 @@ export function IncidentDetail() {
         action={<Badge value={incident.status} />}
       />
       <Notice error={error || action.error} message={action.message} />
+      {pendingApproval && (
+        <div className="notice">
+          Approval pending until {date(pendingApproval.expires_at)}.{" "}
+          <Link to="/approvals">Review the proposed action</Link>
+        </div>
+      )}
       <div className="lifecycle">
         {stages.map(([name, reached]) => (
           <div key={name} className={reached ? "reached" : ""}>

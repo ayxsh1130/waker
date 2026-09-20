@@ -95,6 +95,7 @@ def health():
         checks["retrieval"] = lambda: probes.http_health(cfg.embedding_service_url)
     with ThreadPoolExecutor(max_workers=8) as pool:
         results = dict(zip(checks, pool.map(lambda fn: fn(), checks.values()), strict=True))
+    operational_status = "HEALTHY" if all(r["status"] == "HEALTHY" for r in results.values()) else "DEGRADED"
     results["llm"] = {
         "status": "DEGRADED" if cfg.llm_configured else "UNAVAILABLE",
         "configured": cfg.llm_configured,
@@ -108,7 +109,7 @@ def health():
         "detail": "Optional; local source inspection is available",
     }
     return {
-        "status": "HEALTHY" if all(r["status"] == "HEALTHY" for r in results.values()) else "DEGRADED",
+        "status": operational_status,
         "services": results,
     }
 

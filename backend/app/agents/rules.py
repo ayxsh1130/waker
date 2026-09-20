@@ -1,13 +1,13 @@
 import json
 
 from app.core.schemas import DiagnosisOutput
-from app.investigation.verification import COMPONENT, worker_failure_observations
+from app.investigation.verification import COMPONENT, broker_status, worker_failure_observations
 
 
 def diagnose_rule(evidence):
     text = json.dumps([e["content"] for e in evidence], default=str).lower()
     cause, action = "UNKNOWN", "REQUEST_HUMAN"
-    if '"broker": {"status": "unavailable"' in text:
+    if broker_status(evidence) == "UNAVAILABLE":
         cause = "BROKER_DISRUPTION"
     elif worker_failure_observations(evidence)[0]:
         cause, action = "WORKER_FAILURE", "RESTART_WORKER"

@@ -118,6 +118,13 @@ class FaultInput(StrictModel):
     duration_seconds: int = Field(40, ge=10, le=600)
     task_count: int = Field(3, ge=1, le=30)
 
+    @model_validator(mode="before")
+    @classmethod
+    def worker_test_window(cls, value):
+        if isinstance(value, dict) and value.get("fault_type") == Cause.WORKER_FAILURE:
+            value = {"duration_seconds": 600, **value}
+        return value
+
     @model_validator(mode="after")
     def supported(self):
         if self.fault_type == Cause.UNKNOWN:

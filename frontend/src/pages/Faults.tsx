@@ -70,7 +70,10 @@ export default function Faults() {
           <div className="toolbar">
             <label>
               Scenario
-              <select value={fault} onChange={(e) => setFault(e.target.value)}>
+              <select value={fault} onChange={(e) => {
+                setFault(e.target.value);
+                setDuration(e.target.value === "WORKER_FAILURE" ? "600" : "40");
+              }}>
                 {faults.map((f) => (
                   <option key={f}>{f}</option>
                 ))}
@@ -105,6 +108,10 @@ export default function Faults() {
             </button>
           </div>
           <p>{explanations[fault]}</p>
+          {fault === "WORKER_FAILURE" && (
+            <p>For manual worker tests, pending approvals extend cleanup up to their deadline,
+              with a maximum of 30 minutes after the crash. Reset cancels pending restart approvals.</p>
+          )}
         </form>
       </Panel>
       <Panel title="Injection and cleanup ledger">

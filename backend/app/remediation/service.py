@@ -65,22 +65,37 @@ def context_for(db, incident, diagnosis, exclude=None):
         any(e.status in {"FAILED", "UNCERTAIN"} for e in executions),
         any(
             r.action == diagnosis.recommended_action
-            and seconds(now(), r.created_at) < cfg.remediation_cooldown_seconds
+            and any(
+                e.remediation_id == r.id
+                and (
+                    e.status in {"EXECUTING", "OBSERVING"}
+                    or seconds(now(), e.created_at) < cfg.remediation_cooldown_seconds
+                )
+                for e in executions
+            )
             for r in previous
         ),
         cfg.app_environment,
+        diagnosis.root_cause,
     )
     return context, verification
 
 
 def propose(db, incident, diagnosis):
+    db.flush()
+    db.refresh(incident, with_for_update=True)
     old = db.scalar(select(Remediation).where(Remediation.diagnosis_id == diagnosis.id))
     if old:
-        return old
-    context, verification = context_for(db, incident, diagnosis)
+        executed = db.scalar(
+            select(RemediationExecution.id).where(RemediationExecution.remediation_id == old.id)
+        )
+        approval = db.scalar(select(ApprovalRequest.id).where(ApprovalRequest.remediation_id == old.id))
+        if executed or approval or old.status not in {"DENIED", "DRY_RUN"}:
+            return old
+    context, verification = context_for(db, incident, diagnosis, old.id if old else None)
     policy = evaluate(diagnosis.recommended_action, context)
     mode = settings().remediation_mode
-    remediation = Remediation(
+    values = dict(
         incident_id=incident.id,
         diagnosis_id=diagnosis.id,
         verification_id=verification.id if verification else None,
@@ -93,7 +108,13 @@ def propose(db, incident, diagnosis):
         status="DRY_RUN" if mode == "dry_run" else policy.decision,
         requested=mode == "execute" and policy.decision == "ALLOW",
     )
-    db.add(remediation)
+    if old:
+        remediation = old
+        for key, value in values.items():
+            setattr(remediation, key, value)
+    else:
+        remediation = Remediation(**values)
+        db.add(remediation)
     db.flush()
     if mode == "execute" and policy.decision == "APPROVAL_REQUIRED":
         db.add(ApprovalRequest(remediation_id=remediation.id, expires_at=now() + timedelta(minutes=15)))
@@ -114,6 +135,7 @@ def propose(db, incident, diagnosis):
 
 
 def decide_approval(db, remediation_id, approved, actor):
+    remediation = db.scalar(select(Remediation).where(Remediation.id == remediation_id).with_for_update())
     approval = db.scalar(
         select(ApprovalRequest).where(ApprovalRequest.remediation_id == remediation_id).with_for_update()
     )
@@ -121,10 +143,18 @@ def decide_approval(db, remediation_id, approved, actor):
         raise ValueError("Approval is missing or already decided")
     if seconds(now(), approval.expires_at) > 0:
         raise ValueError("Approval expired; investigate again")
+    diagnosis = latest_diagnosis(db, remediation.incident_id)
+    if approved and (
+        not diagnosis
+        or diagnosis.id != remediation.diagnosis_id
+        or settings().remediation_mode != "execute"
+        or remediation.mode != "execute"
+        or remediation.status != "APPROVAL_REQUIRED"
+    ):
+        raise ValueError("Proposal is no longer executable; evaluate the current diagnosis")
     approval.status = "APPROVED" if approved else "REJECTED"
     approval.decided_by = actor
     approval.decided_at = now()
-    remediation = db.get(Remediation, remediation_id)
     remediation.requested = approved
     remediation.status = approval.status
     incident_event(
@@ -136,6 +166,42 @@ def decide_approval(db, remediation_id, approved, actor):
     return approval
 
 
+def expire_approvals(db):
+    for approval in db.scalars(
+        select(ApprovalRequest).where(
+            ApprovalRequest.status.in_(["PENDING", "APPROVED"]),
+            ApprovalRequest.expires_at <= now(),
+        )
+    ):
+        remediation = db.get(Remediation, approval.remediation_id)
+        if db.scalar(
+            select(RemediationExecution.id).where(RemediationExecution.remediation_id == remediation.id)
+        ):
+            continue
+        approval.status = "EXPIRED"
+        remediation.requested = False
+        remediation.status = "EXPIRED"
+        remediation.reason = "Approval deadline expired; investigate current conditions"
+        incident = db.get(Incident, remediation.incident_id)
+        if incident.status == "APPROVAL_REQUIRED":
+            incident.status = "HUMAN_REVIEW"
+        incident_event(db, incident.id, "Approval", {"status": "EXPIRED", "remediation_id": remediation.id})
+
+
+def restart_preflight(db, incident, diagnosis):
+    from app.agents.workflow import evidence_view
+    from app.core.schemas import ToolArguments
+    from app.investigation.verification import worker_failure_observations
+    from app.tools.registry import DiagnosticTools
+
+    tools = DiagnosticTools(db, incident, db.get(Investigation, diagnosis.investigation_id))
+    rows = [tools.run(name, ToolArguments()) for name in ("get_worker_status", "get_redis_status")]
+    for row in rows:
+        row.retrieval_method = "execution_preflight"
+    ok, _ = worker_failure_observations([evidence_view(row) for row in rows])
+    return ok, [row.id for row in rows]
+
+
 def dispatch_action(db, remediation):
     from app.workers.celery_app import celery_app
 
@@ -143,6 +209,8 @@ def dispatch_action(db, remediation):
     task = db.get(TaskExecution, params["task_id"]) if params.get("task_id") else None
     if action == "RETRY_TASK":
         task.status = "PENDING"
+        task.completed_at = None
+        task.result = None
         task.dispatch_after = now() + timedelta(seconds=4)
         return {"scheduled_task_id": task.id, "retry_history_preserved": True}
     if action == "QUARANTINE_TASK":
@@ -212,6 +280,29 @@ def execute_remediation(db, remediation):
     if policy.decision != "ALLOW" and not (policy.decision == "APPROVAL_REQUIRED" and approved):
         remediation.status = "DENIED"
         remediation.reason = policy.reason
+        return None
+    if remediation.action == "RESTART_WORKER":
+        ready, evidence_ids = restart_preflight(db, incident, diagnosis)
+        incident_event(
+            db,
+            incident.id,
+            "Execution preflight",
+            {
+                "ready": ready,
+                "evidence_ids": evidence_ids,
+                "remediation_id": remediation.id,
+            },
+        )
+        if not ready:
+            remediation.status = "DENIED"
+            remediation.reason = "Current worker/broker checks do not justify restart; investigate again"
+            incident.status = "HUMAN_REVIEW"
+            return None
+    if approved and seconds(now(), approval.expires_at) > 0:
+        approval.status = "EXPIRED"
+        remediation.status = "EXPIRED"
+        remediation.reason = "Approval expired during execution preflight"
+        incident.status = "HUMAN_REVIEW"
         return None
     execution = RemediationExecution(
         remediation_id=remediation.id, status="EXECUTING", automatic=not approved

@@ -47,11 +47,12 @@ def search_history(incident, cutoff, allowed_ids=None):
 
 def remember_recovered(db, incident, diagnosis):
     verified = db.scalar(
-        select(Verification).where(Verification.diagnosis_id == diagnosis.id, Verification.verified.is_(True))
+        select(Verification).where(Verification.diagnosis_id == diagnosis.id)
+        .order_by(Verification.created_at.desc()).limit(1)
     )
     if (
         incident.status != "RECOVERED"
-        or not verified
+        or not verified or not verified.verified
         or db.scalar(select(HistoricalIncident).where(HistoricalIncident.incident_id == incident.id))
     ):
         return
