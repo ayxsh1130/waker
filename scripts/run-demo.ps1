@@ -1,16 +1,19 @@
 param([string]$ApiBase = 'http://localhost:8000', [switch]$Authenticated)
 $ErrorActionPreference = 'Stop'
 $session = New-Object Microsoft.PowerShell.Commands.WebRequestSession
+$csrf = $null
 function Request-Api([string]$Path, [string]$Method = 'GET', $Body = $null) {
     $parameters = @{ Uri = "$ApiBase/api$Path"; Method = $Method; WebSession = $session; TimeoutSec = 30 }
+    if ($csrf -and $Method -ne 'GET') { $parameters.Headers = @{ 'X-CSRF-Token' = $csrf } }
     if ($null -ne $Body) { $parameters.ContentType = 'application/json'; $parameters.Body = ConvertTo-Json $Body -Depth 12 }
     Invoke-RestMethod @parameters
 }
 if ($Authenticated) {
-    $secure = Read-Host 'Application token' -AsSecureString
+    $email = Read-Host 'Administrator email'
+    $secure = Read-Host 'Password' -AsSecureString
     $pointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
-    try { $token = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($pointer); Request-Api '/session' 'POST' @{token=$token} | Out-Null }
-    finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($pointer); $token = $null }
+    try { $password = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($pointer); $login = Request-Api '/session' 'POST' @{email=$email;password=$password}; $csrf = $login.csrf_token }
+    finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($pointer); $password = $null }
 }
 $config = Request-Api '/settings'
 if ($config.remediation_mode -ne 'dry_run') { throw 'This walkthrough requires REMEDIATION_MODE=dry_run. See docs/DEMO.md for controlled execution.' }

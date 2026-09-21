@@ -37,15 +37,24 @@ def test_api_input_limits_and_origin_protection(client):
     assert client.get("/api/tasks/missing").status_code == 404
 
 
-def test_auth_cookie_and_secret_non_disclosure(client, monkeypatch):
+def test_auth_cookie_and_secret_non_disclosure(client, monkeypatch, db):
+    from app.identity.service import create_account
+
+    create_account(db, "admin@example.test", "a long unique password", "admin", bootstrap=True)
+    db.commit()
     token = "a-secure-test-admin-token-at-least-32-chars"
     monkeypatch.setenv("APP_AUTH_ENABLED", "true")
     monkeypatch.setenv("ADMIN_TOKEN", token)
     monkeypatch.setenv("GROQ_API_KEY", "never-send-to-browser")
     settings.cache_clear()
     assert client.get("/api/tasks").status_code == 401
-    assert client.post("/api/session", json={"token": "wrong"}).status_code == 401
-    response = client.post("/api/session", json={"token": token})
+    assert (
+        client.post("/api/session", json={"email": "admin@example.test", "password": "wrong"}).status_code
+        == 401
+    )
+    response = client.post(
+        "/api/session", json={"email": "admin@example.test", "password": "a long unique password"}
+    )
     assert response.status_code == 200 and "httponly" in response.headers["set-cookie"].lower()
     assert "samesite=strict" in response.headers["set-cookie"].lower()
     config = client.get("/api/settings")
@@ -55,7 +64,7 @@ def test_auth_cookie_and_secret_non_disclosure(client, monkeypatch):
     assert client.get("/api/tasks").status_code == 401
 
 
-def test_native_login_does_not_require_frontend_secret_code(client, monkeypatch):
+def test_retired_shared_token_login_cannot_authenticate(client, monkeypatch):
     monkeypatch.setenv("APP_AUTH_ENABLED", "true")
     monkeypatch.setenv("ADMIN_TOKEN", "x" * 40)
     settings.cache_clear()
@@ -65,7 +74,8 @@ def test_native_login_does_not_require_frontend_secret_code(client, monkeypatch)
         headers={"content-type": "application/x-www-form-urlencoded", "origin": "http://localhost:5173"},
         follow_redirects=False,
     )
-    assert response.status_code == 303 and response.headers["location"] == "http://localhost:5173"
+    assert response.status_code == 404
+    assert client.post("/api/session", json={"token": "x" * 40}).status_code == 422
 
 
 def test_idempotent_execution_and_durable_log(db, task, monkeypatch):

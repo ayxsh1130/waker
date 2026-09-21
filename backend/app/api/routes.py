@@ -8,7 +8,7 @@ from fastapi.encoders import jsonable_encoder
 from sqlalchemy import select
 
 from app.api.queries import health, incident_detail, metric_summary, task_detail
-from app.core.auth import require_session, require_write
+from app.core.auth import require_admin_operation, require_session, require_write
 from app.core.config import settings
 from app.core.schemas import (
     Configuration,
@@ -199,14 +199,14 @@ def faults(db=Depends(get_db, scope="function")):
     return list_rows(db, FaultInjection)
 
 
-@router.post("/faults/inject", status_code=202, dependencies=[Depends(require_write)])
+@router.post("/faults/inject", status_code=202, dependencies=[Depends(require_admin_operation)])
 def inject_fault(body: FaultInput, db=Depends(get_db, scope="function")):
     if db.scalar(select(Experiment.id).where(Experiment.status.in_(["QUEUED", "RUNNING"]))):
         raise HTTPException(409, "Wait for the active experiment")
     return row_dict(schedule_fault(db, body))
 
 
-@router.post("/faults/{key}/reset", dependencies=[Depends(require_write)])
+@router.post("/faults/{key}/reset", dependencies=[Depends(require_admin_operation)])
 def reset(key: str, db=Depends(get_db, scope="function")):
     fault = required(db, FaultInjection, key)
     if fault.run_id:
@@ -253,7 +253,7 @@ def experiments(db=Depends(get_db, scope="function")):
     return list_rows(db, Experiment)
 
 
-@router.post("/experiments/run", status_code=202, dependencies=[Depends(require_write)])
+@router.post("/experiments/run", status_code=202, dependencies=[Depends(require_admin_operation)])
 def start_experiment(body: ExperimentInput, db=Depends(get_db, scope="function")):
     return row_dict(create_experiment(db, body))
 

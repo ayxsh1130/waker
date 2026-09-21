@@ -17,6 +17,62 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.db.base import Base, Record, now
 
 
+class Account(Record, Base):
+    __tablename__ = "accounts"
+    email: Mapped[str] = mapped_column(String(254), unique=True)
+    password_hash: Mapped[str] = mapped_column(String(255))
+    role: Mapped[str] = mapped_column(String(20), default="viewer")
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+class LoginSession(Record, Base):
+    __tablename__ = "login_sessions"
+    account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id"), index=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class LoginBucket(Base):
+    __tablename__ = "login_buckets"
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    window: Mapped[int] = mapped_column(Integer)
+    count: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class Application(Record, Base):
+    __tablename__ = "applications"
+    name: Mapped[str] = mapped_column(String(100), unique=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # The existing controller only operates on this installation's local workload.
+    kind: Mapped[str] = mapped_column(String(30), default="registered")
+
+
+class ApplicationMember(Base):
+    __tablename__ = "application_members"
+    application_id: Mapped[str] = mapped_column(ForeignKey("applications.id"), primary_key=True)
+    account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id"), primary_key=True)
+
+
+class ConnectorCredential(Record, Base):
+    __tablename__ = "connector_credentials"
+    application_id: Mapped[str] = mapped_column(ForeignKey("applications.id"), index=True)
+    name: Mapped[str] = mapped_column(String(100))
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    scopes: Mapped[list] = mapped_column(JSON)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class AccessAudit(Record, Base):
+    __tablename__ = "access_audit"
+    actor: Mapped[str] = mapped_column(String(100))
+    action: Mapped[str] = mapped_column(String(80))
+    target: Mapped[str] = mapped_column(String(100))
+    details: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
 class TaskExecution(Record, Base):
     __tablename__ = "task_executions"
     name: Mapped[str] = mapped_column(String(80))

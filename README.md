@@ -1,10 +1,14 @@
-# AutoPilot
+# Waker
 
 A local research prototype for investigating failures in a distributed task system and applying controlled, evidence-backed remediation.
 
-AutoPilot runs real Celery tasks, observes their operational failures, collects evidence through restricted diagnostic tools, records a diagnosis, checks that diagnosis deterministically, and evaluates an allowlisted action policy. The dashboard shows actual persisted observations. It starts with an empty incident history and no experiment results.
+Waker runs real Celery tasks, observes their operational failures, collects evidence through restricted diagnostic tools, records a diagnosis, checks that diagnosis deterministically, and evaluates an allowlisted action policy. The dashboard shows actual persisted observations. It starts with an empty incident history and no experiment results.
 
 **Start with `REMEDIATION_MODE=dry_run`.** No LLM key is required for the rule baseline. An LLM provider is required for the five model-based configurations. No ChatGPT account authentication is used.
+
+## Accounts and application registration
+
+The identity milestone adds named accounts, revocable sessions, viewer/operator/admin permissions, application memberships, and scoped connector credentials. Follow [IDENTITY_SETUP.md](docs/IDENTITY_SETUP.md) to upgrade an existing database and enable sign-in. Registered external applications do not yet ingest workloads; existing operational records belong to the local workload.
 
 ## Run on Windows
 

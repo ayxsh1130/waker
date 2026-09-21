@@ -356,15 +356,15 @@ export function Settings() {
               mode enables eligible actions and medium-risk approvals.
             </p>
           </Panel>
-          <Panel title="Optional app sign-in">
+          <Panel title="Account sign-in">
             <p>
-              Set APP_AUTH_ENABLED=true and ADMIN_TOKEN to a random value of at
-              least 32 characters. Sign-in creates an HttpOnly session cookie.
+              Bootstrap an administrator, then set APP_AUTH_ENABLED=true.
+              Each person signs in with an individual account. Sessions can be revoked.
               Backend provider keys are never sent to this dashboard.
             </p>
             <p className="muted">
               Production mode additionally requires HTTPS and secure cookies.
-              This project is a local research prototype.
+              See docs/IDENTITY_SETUP.md for migration and account setup.
             </p>
           </Panel>
         </div>

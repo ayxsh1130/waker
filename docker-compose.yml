@@ -9,6 +9,7 @@ services:
     volumes:
     - control-secrets:/run/autopilot
     - ./services/init_secrets.py:/init_secrets.py:ro
+    - metrics-secrets:/run/waker-metrics
     restart: 'no'
   postgres:
     image: postgres:16-alpine
@@ -270,6 +271,7 @@ services:
     environment: {}
     volumes:
     - control-secrets:/run/autopilot:ro
+    - metrics-secrets:/run/waker-metrics:ro
     - ./backend/app/workers:/source/workers:ro
     - task-artifacts:/data/artifacts
     depends_on:
@@ -398,6 +400,10 @@ services:
     volumes:
     - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
     - prometheus-data:/prometheus
+    - metrics-secrets:/run/waker-metrics:ro
+    depends_on:
+      init-secrets:
+        condition: service_completed_successfully
     ports:
     - 127.0.0.1:9090:9090
     restart: unless-stopped
@@ -432,6 +438,7 @@ services:
     restart: unless-stopped
 volumes:
   control-secrets: {}
+  metrics-secrets: {}
   postgres-data: {}
   redis-data: {}
   chroma-data: {}

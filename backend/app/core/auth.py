@@ -1,20 +1,41 @@
-import hashlib
 import hmac
-import secrets
-import time
-from collections import defaultdict
-from urllib.parse import parse_qs
+from dataclasses import dataclass
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from fastapi.responses import RedirectResponse
-from pydantic import Field
+from pydantic import Field, field_validator
+from sqlalchemy import select
 
 from app.core.config import settings
 from app.core.schemas import StrictModel
+from app.db.base import now
+from app.db.models import Account, Application, ApplicationMember, LoginSession
+from app.db.session import get_db
+from app.identity.service import (
+    DUMMY_HASH,
+    LOCAL_APPLICATION,
+    audit,
+    digest,
+    future,
+    hash_password,
+    new_session,
+    normalize_email,
+    password_matches,
+    passwords,
+    revoke_sessions,
+    throttle_login,
+    user_view,
+)
 
-COOKIE = "autopilot_session"
-attempts = defaultdict(list)
+COOKIE = "waker_session"
 router = APIRouter(prefix="/api/session", tags=["Session"])
+
+
+@dataclass(frozen=True)
+class Principal:
+    id: str
+    role: str
+    email: str
+    development: bool = False
 
 
 def origins():
@@ -28,96 +49,179 @@ def check_origin(request):
         raise HTTPException(403, "Origin is not allowed")
 
 
-def issue_session():
-    payload = str(int(time.time())) + ":" + secrets.token_urlsafe(24)
-    signature = hmac.new(
-        settings().admin_token.get_secret_value().encode(), payload.encode(), hashlib.sha256
-    ).hexdigest()
-    return payload + ":" + signature
+def csrf_token(token):
+    return digest("waker-csrf:" + token)
 
 
-def valid_session(value):
-    try:
-        timestamp, nonce, signature = value.split(":")
-        age = time.time() - int(timestamp)
-        expected = hmac.new(
-            settings().admin_token.get_secret_value().encode(),
-            (timestamp + ":" + nonce).encode(),
-            hashlib.sha256,
-        ).hexdigest()
-        return 0 <= age <= settings().session_ttl_seconds and hmac.compare_digest(expected, signature)
-    except (ValueError, AttributeError):
-        return False
+def resolve_session(db, token):
+    if not settings().app_auth_enabled:
+        return Principal("local-admin", "admin", "local-admin", True)
+    if not token or len(token) > 100:
+        return None
+    record = db.scalar(select(LoginSession).where(LoginSession.token_hash == digest(token)))
+    if not record or record.revoked_at or not future(record.expires_at):
+        return None
+    account = db.get(Account, record.account_id)
+    if not account or not account.active:
+        return None
+    return Principal(account.id, account.role, account.email)
 
 
-def require_session(request: Request):
-    if settings().app_auth_enabled and not valid_session(request.cookies.get(COOKIE, "")):
+def require_identity(request: Request, db=Depends(get_db, scope="function")):
+    principal = resolve_session(db, request.cookies.get(COOKIE, ""))
+    if not principal:
         raise HTTPException(401, "Sign in required")
-    return "local-admin" if not settings().app_auth_enabled else "authenticated-admin"
+    return principal
 
 
-def require_write(request: Request, actor=Depends(require_session)):
-    check_origin(request)
-    return actor
-
-
-def login(request, response, token):
-    check_origin(request)
-    cfg = settings()
-    if not cfg.app_auth_enabled:
-        return
-    address = request.client.host if request.client else "unknown"
-    stamp = time.monotonic()
-    if len(attempts) > 1000:
-        attempts.clear()
-    attempts[address] = [t for t in attempts[address] if stamp - t < 300]
-    if len(attempts[address]) >= 10:
-        raise HTTPException(429, "Too many sign-in attempts; wait five minutes")
-    attempts[address].append(stamp)
-    if not hmac.compare_digest(cfg.admin_token.get_secret_value(), token):
-        raise HTTPException(401, "Invalid application token")
-    attempts.pop(address, None)
-    response.set_cookie(
-        COOKIE,
-        issue_session(),
-        httponly=True,
-        secure=cfg.cookie_secure,
-        samesite="strict",
-        max_age=cfg.session_ttl_seconds,
-        path="/",
+def has_application(db, principal, app_id):
+    if principal.development:
+        return app_id == LOCAL_APPLICATION
+    application = db.get(Application, app_id)
+    return bool(
+        application
+        and application.active
+        and (principal.role == "admin" or db.get(ApplicationMember, (app_id, principal.id)))
     )
 
 
+def require_session(principal=Depends(require_identity), db=Depends(get_db, scope="function")):
+    # Every legacy task, incident, tool, experiment and stream belongs to the local workload.
+    if not has_application(db, principal, LOCAL_APPLICATION):
+        raise HTTPException(403, "You do not have access to the local workload")
+    return principal.id
+
+
+def require_account_write(request: Request, principal=Depends(require_identity)):
+    check_origin(request)
+    if not principal.development and not hmac.compare_digest(
+        request.headers.get("X-CSRF-Token", "").encode(), csrf_token(request.cookies.get(COOKIE, "")).encode()
+    ):
+        raise HTTPException(403, "Refresh your session before submitting this request")
+    return principal
+
+
+def require_write(principal=Depends(require_account_write), actor=Depends(require_session)):
+    if principal.role not in {"admin", "operator"}:
+        raise HTTPException(403, "Operator permission required")
+    return actor
+
+
+def require_admin(principal=Depends(require_identity)):
+    if principal.development:
+        raise HTTPException(403, "Enable account authentication to manage access")
+    if principal.role != "admin":
+        raise HTTPException(403, "Administrator permission required")
+    return principal
+
+
+def require_admin_write(principal=Depends(require_admin), _=Depends(require_account_write)):
+    return principal
+
+
 class LoginInput(StrictModel):
-    token: str = Field(max_length=500)
+    email: str = Field(max_length=254)
+    password: str = Field(min_length=1, max_length=128)
+
+    @field_validator("email")
+    @classmethod
+    def valid_email(cls, value):
+        return normalize_email(value)
+
+
+class PasswordInput(StrictModel):
+    current_password: str = Field(min_length=1, max_length=128)
+    new_password: str = Field(min_length=15, max_length=128)
 
 
 @router.get("")
-def session(request: Request):
+def session(request: Request, db=Depends(get_db, scope="function")):
+    token = request.cookies.get(COOKIE, "")
+    principal = resolve_session(db, token)
     return {
         "auth_enabled": settings().app_auth_enabled,
-        "authenticated": not settings().app_auth_enabled or valid_session(request.cookies.get(COOKIE, "")),
+        "authenticated": principal is not None,
+        "csrf_token": csrf_token(token) if principal and not principal.development else None,
+        "user": {"id": principal.id, "email": principal.email, "role": principal.role} if principal else None,
+        "local_access": has_application(db, principal, LOCAL_APPLICATION) if principal else False,
     }
 
 
 @router.post("")
-def login_json(body: LoginInput, request: Request, response: Response):
-    login(request, response, body.token)
-    return {"authenticated": True}
+def login_json(body: LoginInput, request: Request, response: Response, db=Depends(get_db, scope="function")):
+    check_origin(request)
+    if not settings().app_auth_enabled:
+        raise HTTPException(409, "Account authentication is disabled")
+    throttle_login(request.client.host if request.client else "unknown", body.email)
+    account = db.scalar(select(Account).where(Account.email == body.email))
+    matched = password_matches(account.password_hash if account else DUMMY_HASH, body.password)
+    if not account or not matched or not account.active:
+        # Commit failures deliberately, so rejecting the HTTP request cannot erase the audit.
+        audit(db, "anonymous", "login.failed", "session")
+        db.commit()
+        raise HTTPException(401, "Invalid email or password")
+    if passwords.check_needs_rehash(account.password_hash):
+        account.password_hash = hash_password(body.password)
+    old = db.scalar(
+        select(LoginSession).where(LoginSession.token_hash == digest(request.cookies.get(COOKIE, "")))
+    )
+    if old:
+        old.revoked_at = now()
+    token = new_session(db, account, settings().session_ttl_seconds)
+    audit(db, account.id, "login.succeeded", account.id)
+    response.set_cookie(
+        COOKIE,
+        token,
+        httponly=True,
+        secure=settings().cookie_secure,
+        samesite="strict",
+        max_age=settings().session_ttl_seconds,
+        path="/",
+    )
+    return {"authenticated": True, "user": user_view(account), "csrf_token": csrf_token(token)}
 
 
-@router.post("/login")
-async def login_form(request: Request):
-    body = await request.body()
-    if len(body) > 2000:
-        raise HTTPException(413, "Form is too large")
-    values = parse_qs(body.decode("utf-8", errors="replace"))
-    response = RedirectResponse(settings().frontend_url, status_code=303)
-    login(request, response, values.get("token", [""])[0])
-    return response
-
-
-@router.delete("", dependencies=[Depends(require_write)])
-def logout(response: Response):
-    response.delete_cookie(COOKIE, path="/")
+@router.delete("")
+def logout(
+    request: Request,
+    response: Response,
+    principal=Depends(require_account_write),
+    db=Depends(get_db, scope="function"),
+):
+    record = db.scalar(
+        select(LoginSession).where(LoginSession.token_hash == digest(request.cookies.get(COOKIE, "")))
+    )
+    if record:
+        record.revoked_at = now()
+        audit(db, principal.id, "logout", principal.id)
+    response.delete_cookie(
+        COOKIE, path="/", secure=settings().cookie_secure, httponly=True, samesite="strict"
+    )
     return {"authenticated": False}
+
+
+@router.post("/password")
+def change_password(
+    body: PasswordInput,
+    request: Request,
+    response: Response,
+    principal=Depends(require_account_write),
+    db=Depends(get_db, scope="function"),
+):
+    if principal.development:
+        raise HTTPException(409, "Account authentication is disabled")
+    throttle_login(request.client.host if request.client else "unknown", principal.email)
+    account = db.get(Account, principal.id)
+    if not password_matches(account.password_hash, body.current_password):
+        raise HTTPException(401, "Current password is incorrect")
+    account.password_hash = hash_password(body.new_password)
+    revoke_sessions(db, account.id)
+    audit(db, principal.id, "password.changed", account.id)
+    response.delete_cookie(COOKIE, path="/")
+    return {"authenticated": False, "message": "Password changed. Sign in again on each device."}
+
+
+def require_admin_operation(principal=Depends(require_identity), actor=Depends(require_write)):
+    if principal.role != "admin":
+        raise HTTPException(403, "Administrator permission required for fault and experiment controls")
+    return actor

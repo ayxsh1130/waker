@@ -17,3 +17,4 @@ opentelemetry-instrumentation-fastapi==0.65b0
 opentelemetry-instrumentation-celery==0.65b0
 opentelemetry-instrumentation-httpx==0.65b0
 Pillow==12.3.0
+argon2-cffi==25.1.0

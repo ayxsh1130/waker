@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     cookie_secure: bool = False
     app_environment: Literal["development", "test", "production"] = "development"
     internal_token: SecretStr = SecretStr("")
+    metrics_token_file: str = "/run/waker-metrics/token"
     internal_token_file: str = "/run/autopilot/control_token"
     dependency_url: str = "http://test-dependency:8080"
     worker_control_url: str = "http://worker-control:8090"
@@ -72,8 +73,6 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def secure_deployment(self):
-        if self.app_auth_enabled and len(self.admin_token.get_secret_value()) < 32:
-            raise ValueError("Authentication requires an ADMIN_TOKEN of at least 32 characters")
         if self.app_environment == "production" and not (self.app_auth_enabled and self.cookie_secure):
             raise ValueError("Production requires application authentication and HTTPS cookies")
         return self

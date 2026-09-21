@@ -30,8 +30,9 @@ import {
 } from "lucide-react";
 import { lazy, Suspense, useState } from "react";
 import { useApi, useLive } from "./hooks/useApi";
-import { base, refreshData } from "./services/api";
+import { api, refreshData } from "./services/api";
 import { Notice } from "./components/ui";
+const Access = lazy(() => import("./pages/Access"));
 const Overview = lazy(() => import("./pages/Overview"));
 const Tasks = lazy(() => import("./pages/Tasks"));
 const Faults = lazy(() => import("./pages/Faults"));
@@ -77,8 +78,15 @@ const links = [
   ["health", "System health", HeartPulse],
   ["research", "Research", Network],
   ["settings", "Settings", SettingsIcon],
+  ["access", "Accounts & applications", ShieldCheck],
 ] as const;
-function Workspace() {
+type SessionData = {
+  auth_enabled: boolean;
+  authenticated: boolean;
+  local_access: boolean;
+  user: { id: string; email: string; role: string } | null;
+};
+function Workspace({ session }: { session: SessionData }) {
   const connected = useLive();
   const [menu, setMenu] = useState(false);
   const location = useLocation();
@@ -94,7 +102,7 @@ function Workspace() {
             <Activity size={24} />
           </span>
           <div>
-            AutoPilot<small>Operations intelligence</small>
+            Waker<small>Operations intelligence</small>
           </div>
         </Link>
         <div className="workspace-label">
@@ -102,7 +110,7 @@ function Workspace() {
           Local environment<span className="key">DEV</span>
         </div>
         <nav aria-label="Main navigation">
-          {links.map(([path, name, Icon], i) => (
+          {links.filter(([path]) => session.auth_enabled || path !== "access").map(([path, name, Icon], i) => (
             <div key={path}>
               {i === 4 && <div className="nav-group">Infrastructure</div>}
               {i === 8 && <div className="nav-group">Control & research</div>}
@@ -157,7 +165,8 @@ function Workspace() {
             >
               <RefreshCw size={16} />
             </button>
-            <span className="avatar">AP</span>
+            <span>{session.user?.role}</span>
+            {session.auth_enabled && <button onClick={() => { void api("/session", "DELETE").then(refreshData).catch(() => refreshData()); }}>Sign out</button>}
           </div>
         </header>
         <main>
@@ -180,6 +189,7 @@ function Workspace() {
               <Route path="/health" element={<Health />} />
               <Route path="/research" element={<Research />} />
               <Route path="/settings" element={<Settings />} />
+              <Route path="/access" element={<Access role={session.user?.role ?? "viewer"} />} />
               <Route path="*" element={<Navigate to="/overview" replace />} />
             </Routes>
           </Suspense>
@@ -194,45 +204,34 @@ function Workspace() {
   );
 }
 function Session() {
-  const session = useApi<{ auth_enabled: boolean; authenticated: boolean }>(
-    "/session",
+  const session = useApi<SessionData>("/session");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  if (!session.data) return <div className="login"><h1>Waker</h1><p>Connecting to the operations API…</p><Notice error={session.error} /><button onClick={refreshData}>Retry connection</button></div>;
+  if (!session.data.authenticated) return (
+    <div className="login">
+      <Activity size={36} /><h1>Sign in to Waker</h1>
+      <form onSubmit={async (event) => {
+        event.preventDefault(); setBusy(true); setError("");
+        try { await api("/session", "POST", { email, password }); setPassword(""); refreshData(); }
+        catch (e) { setError(e instanceof Error ? e.message : "Sign-in failed"); }
+        finally { setBusy(false); }
+      }}>
+        <label>Email<input type="email" autoComplete="username" value={email} onChange={e => setEmail(e.target.value)} maxLength={254} required /></label>
+        <label>Password<input type="password" autoComplete="current-password" value={password} onChange={e => setPassword(e.target.value)} maxLength={128} required /></label>
+        <Notice error={error} /><button className="primary" disabled={busy}>{busy ? "Signing in…" : "Sign in"}</button>
+      </form>
+      <p className="muted">Use your personal account. Ask your administrator if you need access.</p>
+    </div>
   );
-  if (!session.data)
-    return (
-      <div className="login">
-        <Activity size={36} />
-        <h1>AutoPilot</h1>
-        <p>Connecting to the operations API…</p>
-        <Notice error={session.error} />
-        <button onClick={refreshData}>Retry connection</button>
-      </div>
-    );
-  if (!session.data.authenticated)
-    return (
-      <div className="login">
-        <Activity size={36} />
-        <h1>Sign in to AutoPilot</h1>
-        <p>Use the application token configured on your local backend.</p>
-        <form method="post" action={base + "/api/session/login"}>
-          <label>
-            Application token
-            <input
-              type="password"
-              name="token"
-              autoComplete="current-password"
-              maxLength={500}
-              required
-            />
-          </label>
-          <button className="primary">Sign in</button>
-        </form>
-        <p className="muted">
-          Your application token is submitted directly to the backend. Provider
-          API keys do not belong here.
-        </p>
-      </div>
-    );
-  return <Workspace />;
+  if (!session.data.local_access) return <main className="login" style={{ maxWidth: "1000px" }}>
+    <h1>Waker</h1><p>Signed in as {session.data.user?.email}. Your applications are listed below.</p>
+    <button onClick={() => { void api("/session", "DELETE").then(refreshData).catch(() => refreshData()); }}>Sign out</button>
+    <Suspense fallback={<p>Loading applications…</p>}><Access role={session.data.user?.role ?? "viewer"} /></Suspense>
+  </main>;
+  return <Workspace session={session.data} />;
 }
 export default function App() {
   return (

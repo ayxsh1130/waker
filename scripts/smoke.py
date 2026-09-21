@@ -8,25 +8,34 @@ import time
 import urllib.error
 import urllib.request
 import uuid
+from getpass import getpass
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--base", default="http://localhost:8000")
     parser.add_argument("--timeout", type=int, default=120)
+    parser.add_argument("--email", help="Account email; password is prompted securely")
     args = parser.parse_args()
     opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
 
+    csrf = None
+
     def request(path, body=None):
         data = json.dumps(body).encode() if body is not None else None
-        req = urllib.request.Request(
-            args.base + "/api" + path, data=data, headers={"Content-Type": "application/json"} if data else {}
-        )
+        headers = {"Content-Type": "application/json"} if data else {}
+        if data and csrf:
+            headers["X-CSRF-Token"] = csrf
+        req = urllib.request.Request(args.base + "/api" + path, data=data, headers=headers)
         with opener.open(req, timeout=15) as response:
             return json.load(response)
 
-    if os.getenv("AUTOPILOT_APP_TOKEN"):
-        request("/session", {"token": os.environ["AUTOPILOT_APP_TOKEN"]})
+    email = args.email or os.getenv("WAKER_EMAIL")
+    if email:
+        login = request("/session", {"email": email, "password": getpass("Waker password: ")})
+        csrf = login["csrf_token"]
+    elif request("/session")["auth_enabled"]:
+        parser.error("Authentication is enabled; supply --email for an operator or administrator account")
     config = request("/settings")
     assert config["remediation_mode"] == "dry_run", "Smoke run expects dry_run"
     workers = request("/workers")

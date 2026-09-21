@@ -2012,3 +2012,24 @@ input[type="number"]::-webkit-outer-spin-button {
   -webkit-appearance: none;
   margin: 0;
 }
+/* Functional account forms; the dashboard theme is unchanged. */
+.access-page .form-grid {
+  display: grid;
+  gap: 14px;
+  max-width: 680px;
+  margin: 20px 0;
+}
+.access-page fieldset label {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0;
+}
+.access-page input[type="checkbox"] {
+  width: auto;
+  flex: 0 0 auto;
+}
+.access-page td button {
+  margin: 4px;
+}
