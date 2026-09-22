@@ -12,7 +12,7 @@ The identity milestone adds named accounts, revocable sessions, viewer/operator/
 
 ## Run on Windows
 
-Install Docker Desktop with its Linux container engine and WSL 2 enabled. Start Docker Desktop before running these commands. Extract the ZIP and open the inner `autopilot` folder in VS Code.
+Install Docker Desktop with its Linux container engine and WSL 2 enabled. Start Docker Desktop before running these commands. Extract the ZIP and open the inner `waker` folder in VS Code.
 
 In the VS Code PowerShell terminal:
 
@@ -23,7 +23,7 @@ docker compose up -d --build
 docker compose ps
 ```
 
-Open [AutoPilot](http://localhost:5173). Initial container builds and the first local embedding-model download can take several minutes. Optional retrieval may remain unavailable while its model loads; the API and rule baseline can still run.
+Open [Waker](http://localhost:5173). Initial container builds and the first local embedding-model download can take several minutes. Optional retrieval may remain unavailable while its model loads; the API and rule baseline can still run.
 
 Or use the startup script:
 
