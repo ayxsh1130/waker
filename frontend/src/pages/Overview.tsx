@@ -1,7 +1,7 @@
 import { Activity, Plus } from "lucide-react";
 import { useAction, useApi } from "../hooks/useApi";
 import { api } from "../services/api";
-import type { Incident, Sample, Summary } from "../types";
+import type { Incident, Row, Sample, Summary, Task } from "../types";
 import {
   Badge,
   DataTable,
@@ -11,14 +11,19 @@ import {
   RecordLink,
   Stat,
 } from "../components/ui";
-import { date } from "../components/format";
+import { date, newestFirst, show } from "../components/format";
 import { SeriesChart } from "../components/charts";
 export default function Overview() {
   const summary = useApi<Summary>("/metrics/summary");
   const samples = useApi<Sample[]>("/metrics/timeseries");
   const incidents = useApi<Incident[]>("/incidents");
+  const tasks = useApi<Task[]>("/tasks");
+  const approvals = useApi<Row[]>("/approvals");
   const action = useAction();
   const latest = summary.data?.latest;
+  const pendingApprovals = newestFirst(approvals.data ?? []).filter(
+    (r) => r.status === "PENDING",
+  );
   return (
     <>
       <PageTitle
@@ -43,7 +48,12 @@ export default function Overview() {
       />
       <Notice
         error={
-          summary.error || incidents.error || samples.error || action.error
+          summary.error ||
+          incidents.error ||
+          samples.error ||
+          tasks.error ||
+          approvals.error ||
+          action.error
         }
         message={action.message}
       />
@@ -68,9 +78,9 @@ export default function Overview() {
           detail="Terminal failures / recent completions"
         />
         <Stat
-          title="Workers online"
-          value={latest?.active_workers}
-          detail={`${summary.data?.worker_count ?? 0} workers observed`}
+          title="Pending approvals"
+          value={pendingApprovals.length}
+          detail="Awaiting a human decision"
         />
       </div>
       <div className="section-note">
@@ -93,36 +103,82 @@ export default function Overview() {
           data={samples.data ?? []}
         />
       </div>
-      <Panel
-        title="Recent incidents"
-        aside={
-          <span className="muted">
-            {summary.data?.recovered_incidents ?? 0} confirmed recoveries
-          </span>
-        }
-      >
-        <DataTable
-          rows={(incidents.data ?? []).slice(0, 8)}
-          columns={[
-            {
-              key: "title",
-              name: "Incident",
-              render: (r) => <RecordLink id={r.id} text={r.title} />,
-            },
-            {
-              key: "status",
-              name: "Status",
-              render: (r) => <Badge value={r.status} />,
-            },
-            { key: "component", name: "Component" },
-            {
-              key: "created_at",
-              name: "Detected",
-              render: (r) => date(r.created_at),
-            },
-          ]}
-        />
-      </Panel>
+      <div className="three-col">
+        <Panel
+          title="Incidents"
+          aside={
+            <span className="muted">
+              {summary.data?.recovered_incidents ?? 0} recovered
+            </span>
+          }
+        >
+          <DataTable
+            rows={newestFirst(incidents.data ?? []).slice(0, 6)}
+            empty="No incidents observed yet."
+            columns={[
+              {
+                key: "title",
+                name: "Incident",
+                render: (r) => <RecordLink id={r.id} text={r.title} />,
+              },
+              {
+                key: "status",
+                name: "Status",
+                render: (r) => <Badge value={r.status} />,
+              },
+              {
+                key: "created_at",
+                name: "Detected",
+                render: (r) => date(r.created_at),
+              },
+            ]}
+          />
+        </Panel>
+        <Panel
+          title="Tasks"
+          aside={<span className="muted">{tasks.data?.length ?? 0} total</span>}
+        >
+          <DataTable
+            rows={newestFirst(tasks.data ?? []).slice(0, 6)}
+            empty="No tasks submitted yet."
+            columns={[
+              { key: "name", name: "Task" },
+              {
+                key: "status",
+                name: "State",
+                render: (r) => <Badge value={r.status} />,
+              },
+              {
+                key: "created_at",
+                name: "Accepted",
+                render: (r) => date(r.created_at),
+              },
+            ]}
+          />
+        </Panel>
+        <Panel
+          title="Approvals"
+          aside={<span className="muted">{pendingApprovals.length} pending</span>}
+        >
+          <DataTable
+            rows={pendingApprovals.slice(0, 6)}
+            empty="Nothing is waiting on a human decision."
+            columns={[
+              { key: "action", name: "Action", render: (r) => show(r.action) },
+              {
+                key: "risk",
+                name: "Risk",
+                render: (r) => <Badge value={r.risk} />,
+              },
+              {
+                key: "expires_at",
+                name: "Expires",
+                render: (r) => date(r.expires_at),
+              },
+            ]}
+          />
+        </Panel>
+      </div>
     </>
   );
 }

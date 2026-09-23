@@ -15,3 +15,12 @@ export function date(value: unknown) {
 export function label(value: unknown) {
   return show(value).replaceAll("_", " ").toLowerCase();
 }
+export function newestFirst<T extends { created_at?: unknown }>(
+  rows: T[],
+): T[] {
+  return [...rows].sort(
+    (a, b) =>
+      new Date(String(b.created_at ?? "")).getTime() -
+      new Date(String(a.created_at ?? "")).getTime(),
+  );
+}

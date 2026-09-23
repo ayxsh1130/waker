@@ -11,7 +11,7 @@ import {
   PageTitle,
   Panel,
 } from "../components/ui";
-import { date } from "../components/format";
+import { date, newestFirst } from "../components/format";
 function TaskInspector({ id }: { id: string }) {
   const { data, error } = useApi<{ task: Task; logs: Row[] }>("/tasks/" + id);
   return (
@@ -119,7 +119,7 @@ export default function Tasks() {
       </Panel>
       <Panel title="Execution ledger">
         <DataTable
-          rows={data ?? []}
+          rows={newestFirst(data ?? [])}
           columns={[
             {
               key: "name",

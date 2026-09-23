@@ -32,6 +32,7 @@ import { lazy, Suspense, useState } from "react";
 import { useApi, useLive } from "./hooks/useApi";
 import { api, refreshData } from "./services/api";
 import { Notice } from "./components/ui";
+import Home from "./pages/Home";
 const Access = lazy(() => import("./pages/Access"));
 const Overview = lazy(() => import("./pages/Overview"));
 const Tasks = lazy(() => import("./pages/Tasks"));
@@ -233,10 +234,15 @@ function Session() {
   </main>;
   return <Workspace session={session.data} />;
 }
+function Root() {
+  const location = useLocation();
+  if (location.pathname === "/") return <Home />;
+  return <Session />;
+}
 export default function App() {
   return (
     <BrowserRouter>
-      <Session />
+      <Root />
     </BrowserRouter>
   );
 }

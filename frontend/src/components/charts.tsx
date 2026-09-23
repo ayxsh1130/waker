@@ -11,8 +11,8 @@ import {
 } from "recharts";
 import type { Sample } from "../types";
 import { Empty, Panel } from ".//ui";
-const grid = "#27303e",
-  text = "#8794a8";
+const grid = "#e7dcc5",
+  text = "#8a7d64";
 export function SeriesChart({
   title,
   data,
@@ -52,7 +52,7 @@ export function SeriesChart({
               <YAxis tick={{ fill: text, fontSize: 11 }} width={42} />
               <Tooltip
                 contentStyle={{
-                  background: "#151b25",
+                  background: "#fffdf9",
                   border: "1px solid " + grid,
                   borderRadius: 8,
                 }}
@@ -60,8 +60,8 @@ export function SeriesChart({
               <Area
                 type="monotone"
                 dataKey={field}
-                stroke="#5b92ff"
-                fill="#5b92ff"
+                stroke="#e85d2c"
+                fill="#e85d2c"
                 fillOpacity={0.1}
                 connectNulls={false}
                 isAnimationActive={false}
@@ -102,13 +102,13 @@ export function ComparisonChart({
               />
               <Tooltip
                 contentStyle={{
-                  background: "#151b25",
+                  background: "#fffdf9",
                   border: "1px solid " + grid,
                 }}
               />
               <Bar
                 dataKey="value"
-                fill="#5b92ff"
+                fill="#e85d2c"
                 radius={[0, 4, 4, 0]}
                 isAnimationActive={false}
               />

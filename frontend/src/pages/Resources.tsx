@@ -12,7 +12,7 @@ import {
   RecordLink,
   Stat,
 } from "../components/ui";
-import { date, show } from "../components/format";
+import { date, newestFirst, show } from "../components/format";
 import { SeriesChart } from "../components/charts";
 export function Workers() {
   const { data, error } = useApi<Row[]>("/workers");
@@ -156,7 +156,7 @@ export function History() {
       />
       <Notice error={error} />
       <div className="cards">
-        {(data ?? []).map((r) => (
+        {newestFirst(data ?? []).map((r) => (
           <Panel
             key={r.id}
             title={"Recovered incident " + String(r.incident_id).slice(0, 8)}
@@ -189,7 +189,7 @@ export function Approvals() {
       <Notice error={error || action.error} message={action.message} />
       <Panel title="Approval queue">
         <DataTable
-          rows={data ?? []}
+          rows={newestFirst(data ?? [])}
           columns={[
             {
               key: "action",
