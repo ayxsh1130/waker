@@ -1,0 +1,4 @@
+celery>=5.3,<6
+requests>=2.31,<3
+
+redis>=5,<7

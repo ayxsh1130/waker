@@ -65,6 +65,22 @@ class ConnectorCredential(Record, Base):
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class ApplicationEvent(Record, Base):
+    __tablename__ = "application_events"
+    event_id: Mapped[str] = mapped_column(String(100), unique=True, index=True)
+    application_id: Mapped[str] = mapped_column(ForeignKey("applications.id"), index=True)
+    event_type: Mapped[str] = mapped_column(String(60), index=True)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    task_id: Mapped[str | None] = mapped_column(String(100), index=True)
+    task_name: Mapped[str | None] = mapped_column(String(200))
+    worker_id: Mapped[str | None] = mapped_column(String(200), index=True)
+    queue: Mapped[str | None] = mapped_column(String(100), index=True)
+    correlation_id: Mapped[str | None] = mapped_column(String(100), index=True)
+    trace_id: Mapped[str | None] = mapped_column(String(100))
+    payload: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
 class AccessAudit(Record, Base):
     __tablename__ = "access_audit"
     actor: Mapped[str] = mapped_column(String(100))

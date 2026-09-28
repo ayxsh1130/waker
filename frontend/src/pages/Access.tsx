@@ -75,9 +75,9 @@ function ApplicationControls({ application }: { application: Application }) {
       }} /> {account.email} ({account.role})</label>)}
     </fieldset>
     {application.kind !== "local" && <>
-      <p>Connector credentials currently support identity checks and contact heartbeats. Workload ingestion will be connected in the next milestone.</p>
+      <p>Connector credentials are application-scoped and can authorize workload event ingestion.</p>
       <form className="form-grid" onSubmit={e => { e.preventDefault(); void action.run(async () => {
-        const result = await api<{ token: string }>(`/applications/${application.id}/credentials`, "POST", { name, scopes: ["identity:read", "heartbeat:write"], expires_in_days: 30 }); setToken(result.token);
+        const result = await api<{ token: string }>(`/applications/${application.id}/credentials`, "POST", { name, scopes: ["events:write"], expires_in_days: 30 }); setToken(result.token);
       }, "Credential created with a 30-day expiry."); }}>
         <label>Credential name<input value={name} onChange={e => setName(e.target.value)} maxLength={100} required /></label>
         <button disabled={action.busy}>Create connector credential</button>

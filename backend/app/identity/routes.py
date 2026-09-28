@@ -12,14 +12,18 @@ from app.core.auth import (
     require_admin_write,
     require_identity,
 )
-from app.core.schemas import StrictModel
-from app.db.base import now
+from app.core.schemas import ConnectorEventInput, StrictModel
+from app.db.base import now, uid
+from app.core.safety import redact
 from app.db.models import (
     AccessAudit,
+    ApplicationEvent,
     Account,
     Application,
     ApplicationMember,
     ConnectorCredential,
+    TaskExecution,
+    Worker,
 )
 from app.db.session import get_db
 from app.identity.service import (
@@ -58,7 +62,7 @@ class MembersInput(StrictModel):
 
 class CredentialInput(StrictModel):
     name: str = Field(min_length=1, max_length=100)
-    scopes: list[Literal["identity:read", "heartbeat:write"]] = Field(min_length=1, max_length=2)
+    scopes: list[Literal["identity:read", "heartbeat:write", "events:write"]] = Field(min_length=1, max_length=3)
     expires_in_days: int = Field(default=30, ge=1, le=365)
 
 
@@ -263,3 +267,110 @@ def connector_heartbeat(key: str, request: Request, db=Depends(get_db, scope="fu
     record, _ = connector(db, request, key, "heartbeat:write")
     record.last_seen_at = now()
     return {"application_id": key, "received_at": record.last_seen_at, "meaning": "Connector contact only"}
+
+
+def _worker_name(application_id: str, worker_id: str) -> str:
+    # Worker.name is globally unique in the existing schema. Namespace external
+    # workers so two applications cannot collide without weakening that invariant.
+    return f"{application_id}:{worker_id}"[:100]
+
+
+def _project_task_event(db, event: ConnectorEventInput):
+    if not event.task_id:
+        return None
+    task = db.get(TaskExecution, event.task_id)
+    if task and task.scope_id != event.application_id:
+        raise HTTPException(403, "Task belongs to another application")
+    status_map = {
+        "task.sent": "PENDING",
+        "task.received": "QUEUED",
+        "task.started": "STARTED",
+        "task.succeeded": "SUCCEEDED",
+        "task.failed": "FAILED",
+        "task.retried": "RETRYING",
+        "task.revoked": "REVOKED",
+    }
+    status = status_map.get(event.event_type)
+    if not status:
+        return task
+    worker = _worker_name(event.application_id, event.worker_id) if event.worker_id else None
+    if not task:
+        task = TaskExecution(
+            id=event.task_id,
+            name=(event.task_name or "external.celery.task")[:80],
+            queue=(event.queue or "unknown")[:60],
+            worker=worker,
+            status=status,
+            payload={"external": True, "task_name": event.task_name},
+            payload_hash="external-connector",
+            idempotency_key=f"connector:{event.application_id}:{event.task_id}",
+            correlation_id=event.correlation_id or uid(),
+            trace_id=event.trace_id or uid().replace("-", ""),
+            trace_context={},
+            scope_id=event.application_id,
+        )
+        db.add(task)
+    else:
+        task.status = status
+        if worker:
+            task.worker = worker
+        if event.queue:
+            task.queue = event.queue[:60]
+        if event.correlation_id:
+            task.correlation_id = event.correlation_id
+        if event.trace_id:
+            task.trace_id = event.trace_id
+    if status == "STARTED":
+        task.started_at = event.occurred_at
+    if status in {"SUCCEEDED", "FAILED", "REVOKED"}:
+        task.completed_at = event.occurred_at
+    if status == "FAILED":
+        task.exception = str(event.payload.get("exception", "External Celery task failure"))[:10000]
+        task.retry_count = int(event.payload.get("retries", task.retry_count) or 0)
+    if status == "RETRYING":
+        task.retry_count = int(event.payload.get("retries", task.retry_count + 1) or 0)
+    return task
+
+
+@router.post("/connector/applications/{key}/events")
+def connector_event(
+    key: str, body: ConnectorEventInput, request: Request, db=Depends(get_db, scope="function")
+):
+    record, _ = connector(db, request, key, "events:write")
+    if body.application_id != key:
+        raise HTTPException(403, "Event application does not match connector credential")
+    if db.scalar(select(ApplicationEvent).where(ApplicationEvent.event_id == body.event_id)):
+        record.last_seen_at = now()
+        return {"status": "duplicate", "event_id": body.event_id}
+    event = ApplicationEvent(
+        event_id=body.event_id,
+        application_id=key,
+        event_type=body.event_type,
+        occurred_at=body.occurred_at,
+        received_at=now(),
+        task_id=body.task_id,
+        task_name=body.task_name,
+        worker_id=body.worker_id,
+        queue=body.queue,
+        correlation_id=body.correlation_id,
+        trace_id=body.trace_id,
+        payload=redact(body.payload),
+    )
+    db.add(event)
+    record.last_seen_at = event.received_at
+    task = _project_task_event(db, body)
+    if body.event_type == "task.failed" and task:
+        from app.incidents.detector import detect_task
+        detect_task(db, task)
+    elif body.event_type == "worker.offline" and body.worker_id:
+        from app.incidents.detector import record_signal
+        record_signal(
+            db,
+            "worker",
+            "heartbeat_lost",
+            {"worker": body.worker_id, "status": "OFFLINE", "occurred_at": body.occurred_at.isoformat()},
+            task=task,
+            scope=key,
+            worker=_worker_name(key, body.worker_id),
+        )
+    return {"status": "accepted", "event_id": body.event_id, "application_id": key}

@@ -320,6 +320,93 @@ def test_connector_scope_expiry_revocation_and_no_user_authority(client, account
     assert client.get(f"/api/connector/applications/{key}", headers=headers).status_code == 401
 
 
+
+
+def test_connector_events_are_scoped_deduplicated_and_project_task_state(client, accounts, db):
+    from app.db.models import ApplicationEvent, TaskExecution
+    from app.identity.service import digest
+
+    sign_in(client, accounts["admin"])
+    key = accounts["remote"].id
+    response = client.post(
+        f"/api/applications/{key}/credentials",
+        json={"name": "celery", "scopes": ["events:write"]},
+    )
+    assert response.status_code == 201, response.text
+    token = response.json()["token"]
+    headers = {"Authorization": "Bearer " + token}
+    client.cookies.clear()
+
+    event = {
+        "event_id": "evt-paperless-0001",
+        "application_id": key,
+        "event_type": "task.started",
+        "occurred_at": "2026-09-24T00:00:00Z",
+        "task_id": "11111111-1111-1111-1111-111111111111",
+        "task_name": "paperless.tasks.consume_file",
+        "worker_id": "paperless-worker@host",
+        "queue": "celery",
+        "correlation_id": "22222222-2222-2222-2222-222222222222",
+        "trace_id": "33333333333333333333333333333333",
+        "payload": {"state": "STARTED", "secret": "should-be-redacted"},
+    }
+    accepted = client.post(f"/api/connector/applications/{key}/events", headers=headers, json=event)
+    assert accepted.status_code == 200, accepted.text
+    assert accepted.json()["status"] == "accepted"
+
+    duplicate = client.post(f"/api/connector/applications/{key}/events", headers=headers, json=event)
+    assert duplicate.status_code == 200
+    assert duplicate.json()["status"] == "duplicate"
+
+    rows = list(db.scalars(select(ApplicationEvent).where(ApplicationEvent.application_id == key)))
+    assert len(rows) == 1
+    assert "secret" not in str(rows[0].payload)
+    task = db.scalar(
+        select(TaskExecution).where(
+            TaskExecution.id == event["task_id"],
+            TaskExecution.scope_id == key,
+        )
+    )
+    assert task is not None and task.status == "STARTED"
+
+    assert client.post(
+        f"/api/connector/applications/{accounts['other'].id}/events", headers=headers, json={**event, "application_id": accounts['other'].id}
+    ).status_code == 403
+    assert db.scalar(select(ApplicationEvent).where(ApplicationEvent.event_id == event["event_id"])).application_id == key
+
+
+def test_connector_failed_event_creates_incident_for_application(client, accounts, db):
+    from app.db.models import Incident
+
+    sign_in(client, accounts["admin"])
+    key = accounts["remote"].id
+    token = client.post(
+        f"/api/applications/{key}/credentials",
+        json={"name": "celery-failures", "scopes": ["events:write"]},
+    ).json()["token"]
+    client.cookies.clear()
+    event = {
+        "event_id": "evt-paperless-failure-0001",
+        "application_id": key,
+        "event_type": "task.failed",
+        "occurred_at": "2026-09-24T00:00:00Z",
+        "task_id": "44444444-4444-4444-4444-444444444444",
+        "task_name": "paperless.tasks.consume_file",
+        "worker_id": "paperless-worker@host",
+        "queue": "celery",
+        "payload": {"exception": "RuntimeError: document processing failed", "retries": 3},
+    }
+    response = client.post(
+        f"/api/connector/applications/{key}/events",
+        headers={"Authorization": "Bearer " + token},
+        json=event,
+    )
+    assert response.status_code == 200, response.text
+    incidents = list(db.scalars(select(Incident).where(Incident.scope_id == key)))
+    assert len(incidents) == 1
+    assert incidents[0].component == "task"
+
+
 def test_connector_heartbeat_cannot_create_operational_evidence(client, accounts):
     sign_in(client, accounts["admin"])
     key = accounts["remote"].id

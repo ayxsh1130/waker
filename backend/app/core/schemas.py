@@ -1,4 +1,5 @@
 from enum import StrEnum
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -6,6 +7,33 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+
+
+
+class ConnectorEventInput(StrictModel):
+    event_id: str = Field(min_length=8, max_length=100)
+    application_id: str = Field(min_length=36, max_length=100)
+    event_type: Literal[
+        "task.sent",
+        "task.received",
+        "task.started",
+        "task.succeeded",
+        "task.failed",
+        "task.retried",
+        "task.revoked",
+        "worker.online",
+        "worker.heartbeat",
+        "worker.offline",
+    ]
+    occurred_at: datetime
+    task_id: str | None = Field(default=None, max_length=36)
+    task_name: str | None = Field(default=None, max_length=200)
+    worker_id: str | None = Field(default=None, max_length=200)
+    queue: str | None = Field(default=None, max_length=100)
+    correlation_id: str | None = Field(default=None, max_length=36)
+    trace_id: str | None = Field(default=None, max_length=32)
+    payload: dict = Field(default_factory=dict)
 
 
 class Cause(StrEnum):
