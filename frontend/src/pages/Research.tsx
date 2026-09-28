@@ -28,7 +28,8 @@ export default function Research() {
   const [name, setName] = useState("Baseline comparison");
   const [selectedConfigs, setConfigs] = useState(["RULE_BASED", "FULL_SYSTEM"]);
   const [selectedFaults, setFaults] = useState(["API_TIMEOUT", "HEALTHY"]);
-  const [trials, setTrials] = useState(1);
+  const [trials, setTrials] = useState("1");
+  const trialCount = trials.trim() === "" ? NaN : Number(trials);
   const [experiment, setExperiment] = useState("");
   const [config, setConfig] = useState("");
   const [fault, setFault] = useState("");
@@ -42,7 +43,7 @@ export default function Research() {
   if (model) params.set("model", model);
   if (since) params.set("since", new Date(since).toISOString());
   const results = useApi<Results>("/experiments/results?" + params);
-  const count = selectedConfigs.length * selectedFaults.length * trials;
+  const count = selectedConfigs.length * selectedFaults.length * trialCount;
   const ongoing = experiments.data?.some((e) =>
     ["QUEUED", "RUNNING"].includes(String(e.status)),
   );
@@ -71,7 +72,7 @@ export default function Research() {
                 name,
                 configurations: selectedConfigs,
                 faults: selectedFaults,
-                trials,
+                trials: trialCount,
               });
               setExperiment(created.id);
             }, "Experiment queued. Runs execute sequentially and clean up between trials.");
@@ -94,8 +95,9 @@ export default function Research() {
                 type="number"
                 min="1"
                 max="10"
+                step="1"
                 value={trials}
-                onChange={(e) => setTrials(Number(e.target.value))}
+                onChange={(e) => setTrials(e.target.value)}
               />
             </label>
           </div>
@@ -131,7 +133,14 @@ export default function Research() {
           </fieldset>
           <button
             className="primary"
-            disabled={action.busy || ongoing || count < 1 || count > 120}
+            disabled={
+              action.busy ||
+              ongoing ||
+              !Number.isInteger(trialCount) ||
+              trialCount < 1 ||
+              trialCount > 10 ||
+              count > 120
+            }
           >
             <FlaskConical size={16} />
             Run experiment

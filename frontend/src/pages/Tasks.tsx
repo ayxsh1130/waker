@@ -12,8 +12,10 @@ import {
   Panel,
 } from "../components/ui";
 import { date, newestFirst } from "../components/format";
+
 function TaskInspector({ id }: { id: string }) {
   const { data, error } = useApi<{ task: Task; logs: Row[] }>("/tasks/" + id);
+
   return (
     <Panel title={"Task detail · " + id.slice(0, 8)}>
       <Notice error={error} />
@@ -38,32 +40,59 @@ function TaskInspector({ id }: { id: string }) {
     </Panel>
   );
 }
+
 export default function Tasks() {
   const { data, error } = useApi<Task[]>("/tasks");
   const action = useAction();
+
   const [name, setName] = useState(taskNames[5]);
-  const [count, setCount] = useState(10);
-  const [size, setSize] = useState(128);
+  const [count, setCount] = useState("10");
+  const [size, setSize] = useState("128");
   const [recipient, setRecipient] = useState("research@example.test");
   const [selected, setSelected] = useState("");
+
+  const recordCount = count.trim() === "" ? NaN : Number(count);
+  const pixelSize = size.trim() === "" ? NaN : Number(size);
+
+  const validCount =
+    Number.isInteger(recordCount) && recordCount >= 1 && recordCount <= 100;
+
+  const validSize =
+    Number.isInteger(pixelSize) && pixelSize >= 16 && pixelSize <= 1024;
+
+  const validRecipient =
+    name !== "send_email" ||
+    /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipient);
+
+  const canSubmit =
+    !action.busy &&
+    validCount &&
+    (name !== "resize_image" || validSize) &&
+    validRecipient;
+
   return (
     <>
       <PageTitle
         title="Task executions"
         description="Six real workload types with durable dispatch, bounded retries, and correlation IDs."
       />
+
       <Notice error={error || action.error} message={action.message} />
+
       <Panel title="Submit task">
         <form
           className="toolbar"
           onSubmit={(e) => {
             e.preventDefault();
+
+            if (!canSubmit) return;
+
             void action.run(
               () =>
                 api("/tasks", "POST", {
                   name,
-                  count,
-                  size,
+                  count: recordCount,
+                  size: pixelSize,
                   recipient,
                   idempotency_key: crypto.randomUUID(),
                 }),
@@ -79,16 +108,26 @@ export default function Tasks() {
               ))}
             </select>
           </label>
+
           <label>
             Records
             <input
               type="number"
               min="1"
               max="100"
+              step="1"
               value={count}
-              onChange={(e) => setCount(Number(e.target.value))}
+              onChange={(e) => setCount(e.target.value)}
+              required
+              aria-invalid={!validCount}
             />
+            {!validCount && (
+              <small className="muted">
+                Enter a whole number from 1 to 100.
+              </small>
+            )}
           </label>
+
           {name === "resize_image" && (
             <label>
               Output pixels
@@ -96,11 +135,20 @@ export default function Tasks() {
                 type="number"
                 min="16"
                 max="1024"
+                step="1"
                 value={size}
-                onChange={(e) => setSize(Number(e.target.value))}
+                onChange={(e) => setSize(e.target.value)}
+                required
+                aria-invalid={!validSize}
               />
+              {!validSize && (
+                <small className="muted">
+                  Enter a whole number from 16 to 1024.
+                </small>
+              )}
             </label>
           )}
+
           {name === "send_email" && (
             <label>
               Mailpit recipient
@@ -112,11 +160,13 @@ export default function Tasks() {
               />
             </label>
           )}
-          <button className="primary" disabled={action.busy}>
+
+          <button className="primary" disabled={!canSubmit}>
             Submit task
           </button>
         </form>
       </Panel>
+
       <Panel title="Execution ledger">
         <DataTable
           rows={newestFirst(data ?? [])}
@@ -125,12 +175,20 @@ export default function Tasks() {
               key: "name",
               name: "Task",
               render: (r) => (
-                <button className="link" onClick={() => {
-                  setSelected(r.id);
-                  requestAnimationFrame(() => {
-                    document.getElementById("task-inspector")?.scrollIntoView({ behavior: "smooth", block: "start" });
-                  });
-                }}>
+                <button
+                  className="link"
+                  onClick={() => {
+                    setSelected(r.id);
+                    requestAnimationFrame(() => {
+                      document
+                        .getElementById("task-inspector")
+                        ?.scrollIntoView({
+                          behavior: "smooth",
+                          block: "start",
+                        });
+                    });
+                  }}
+                >
                   {String(r.name)} ↗
                 </button>
               ),
@@ -152,7 +210,12 @@ export default function Tasks() {
           ]}
         />
       </Panel>
-      {selected && <div id="task-inspector"><TaskInspector id={selected} /></div>}
+
+      {selected && (
+        <div id="task-inspector">
+          <TaskInspector id={selected} />
+        </div>
+      )}
     </>
   );
 }
