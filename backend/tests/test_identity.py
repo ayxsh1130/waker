@@ -324,7 +324,6 @@ def test_connector_scope_expiry_revocation_and_no_user_authority(client, account
 
 def test_connector_events_are_scoped_deduplicated_and_project_task_state(client, accounts, db):
     from app.db.models import ApplicationEvent, TaskExecution
-    from app.identity.service import digest
 
     sign_in(client, accounts["admin"])
     key = accounts["remote"].id
@@ -360,7 +359,8 @@ def test_connector_events_are_scoped_deduplicated_and_project_task_state(client,
 
     rows = list(db.scalars(select(ApplicationEvent).where(ApplicationEvent.application_id == key)))
     assert len(rows) == 1
-    assert "secret" not in str(rows[0].payload)
+    assert rows[0].payload["secret"] == "[REDACTED]"
+    assert "should-be-redacted" not in str(rows[0].payload)
     task = db.scalar(
         select(TaskExecution).where(
             TaskExecution.id == event["task_id"],

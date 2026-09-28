@@ -12,18 +12,17 @@ from app.core.auth import (
     require_admin_write,
     require_identity,
 )
+from app.core.safety import redact
 from app.core.schemas import ConnectorEventInput, StrictModel
 from app.db.base import now, uid
-from app.core.safety import redact
 from app.db.models import (
     AccessAudit,
-    ApplicationEvent,
     Account,
     Application,
+    ApplicationEvent,
     ApplicationMember,
     ConnectorCredential,
     TaskExecution,
-    Worker,
 )
 from app.db.session import get_db
 from app.identity.service import (
