@@ -121,11 +121,6 @@ export default function Tasks() {
               required
               aria-invalid={!validCount}
             />
-            {!validCount && (
-              <small className="muted">
-                Enter a whole number from 1 to 100.
-              </small>
-            )}
           </label>
 
           {name === "resize_image" && (
@@ -141,11 +136,6 @@ export default function Tasks() {
                 required
                 aria-invalid={!validSize}
               />
-              {!validSize && (
-                <small className="muted">
-                  Enter a whole number from 16 to 1024.
-                </small>
-              )}
             </label>
           )}
 
