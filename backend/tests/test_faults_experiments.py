@@ -114,6 +114,9 @@ def test_metric_denominators_and_null_recovery():
     )
     result = aggregate([values, healthy])
     assert result["metrics"]["diagnosis_accuracy"]["n"] == 1
+    assert result["metrics"]["diagnosis_accuracy"]["total_runs"] == 2
+    assert result["metrics"]["diagnosis_accuracy"]["missing_n"] == 1
+    assert result["metrics"]["diagnosis_accuracy"]["coverage"] == 0.5
     assert result["metrics"]["mttr_seconds"]["n"] == 0 and result["detection"]["false_positive_rate"] == 0
     assert result["metrics"]["diagnosis_accuracy"]["sample_sd"] is None
 

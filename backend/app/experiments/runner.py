@@ -1,3 +1,4 @@
+import logging
 import time
 
 from sqlalchemy import select
@@ -24,6 +25,8 @@ from app.experiments.metrics import evaluate_run
 from app.faults.service import reset_fault, schedule_fault
 from app.remediation.service import propose
 from app.tools.probes import redis_status
+
+logger = logging.getLogger(__name__)
 
 
 def run_next(stop):
@@ -231,9 +234,11 @@ def run_next(stop):
             db.commit()
             reset_fault(db, fault)
     except Exception as exc:
+        logger.exception("Experiment trial failed", extra={"experiment_run_id": run_id})
         with session_scope() as db:
             run = db.get(ExperimentRun, run_id)
             run.status = "INTERRUPTED" if stop.is_set() else "FAILED"
-            run.error = "Trial stopped: " + type(exc).__name__
+            # Persist actionable error context without storing provider payloads or secrets.
+            run.error = ("Trial stopped: " if stop.is_set() else "Trial failed: ") + type(exc).__name__ + ": " + str(exc)[:500]
             run.completed_at = now()
             reset_fault(db, db.get(FaultInjection, fault_id))

@@ -99,6 +99,9 @@ def aggregate(rows):
         values = [float(row[key]) for row in rows if isinstance(row.get(key), (int, float))]
         result["metrics"][key] = {
             "n": len(values),
+            "total_runs": len(rows),
+            "missing_n": len(rows) - len(values),
+            "coverage": len(values) / len(rows) if rows else None,
             "mean": mean(values) if values else None,
             "median": median(values) if values else None,
             "sample_sd": stdev(values) if len(values) > 1 else None,
